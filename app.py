@@ -167,6 +167,8 @@ if data_set:
         display_grid.columns = pd.MultiIndex.from_tuples(zip(TIMES, PERIODS))
         st.table(display_grid)
 
+        
+
         # --- Export Buttons ---
         st.divider()
         st.subheader("📥 ดาวน์โหลดข้อมูล")
