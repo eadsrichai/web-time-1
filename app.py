@@ -10,7 +10,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 # --- 1. UI Setup & Centered Styling ---
-st.set_page_config(page_title="AI Timetable - Final Version", layout="wide")
+st.set_page_config(page_title="AI Timetable System", layout="wide")
 st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap');
@@ -19,17 +19,19 @@ st.markdown("""
             text-align: center !important; 
             vertical-align: middle !important; 
             white-space: pre-wrap !important;
-            font-size: 11px;
+            font-size: 12px;
+            height: 65px;
         }
         .schedule-title { 
             background: white; padding: 15px; border-radius: 10px; 
             border-left: 5px solid #0d6efd; margin-bottom: 20px; 
             font-weight: bold; font-size: 22px; text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. Font Registration ---
+# --- 2. Registration of Thai Font ---
 @st.cache_data
 def register_thai_font():
     try:
@@ -53,7 +55,7 @@ def load_data():
     try:
         for f in files:
             df = pd.read_csv(f)
-            df.columns = df.columns.str.strip() # ตัดช่องว่างหัวคอลัมน์
+            df.columns = df.columns.str.strip()
             data[f.replace('.csv', '')] = df
         return data
     except: return None
@@ -109,14 +111,12 @@ if data_set:
     t_df = data_set['teacher'].copy()
     t_df['teacher_id'] = t_df['teacher_id'].astype(str)
     
-    # --- แก้ไข KeyError: 'prefix' แบบ Robust ---
+    # จัดการชื่อผู้สอนสำหรับ Selectbox
     cols = t_df.columns
-    # ตรวจเช็คคอลัมน์ทีละขั้น
     prefix = t_df['prefix'].fillna('') if 'prefix' in cols else ""
-    fname = t_df['firstname'].fillna('') if 'firstname' in cols else t_df['teacher_id']
+    fname = t_df['firstname'].fillna('') if 'firstname' in cols else ""
     lname = t_df['lastname'].fillna('') if 'lastname' in cols else ""
     
-    # สร้าง full_name โดยพิจารณาจากที่มีอยู่
     if 'firstname' in cols:
         t_df['full_name'] = (prefix + fname + " " + lname).str.strip()
     else:
@@ -124,7 +124,6 @@ if data_set:
 
     teacher_map = dict(zip(t_df['teacher_id'], t_df['full_name']))
     teacher_role_map = dict(zip(t_df['teacher_id'], t_df['role'].astype(str).str.lower() if 'role' in cols else ["teacher"]*len(t_df)))
-    
     room_map = dict(zip(data_set['room']['room_id'].astype(str), data_set['room']['room_name']))
     group_map = dict(zip(data_set['student_group']['group_id'].astype(str), data_set['student_group']['group_name']))
 
@@ -132,9 +131,14 @@ if data_set:
         st.header("🎛️ เมนูควบคุม")
         view_mode = st.radio("มุมมอง", ["ตามกลุ่มเรียน", "ตามครูผู้สอน", "ตามห้องเรียน"])
         map_ref = group_map if view_mode == "ตามกลุ่มเรียน" else teacher_map if view_mode == "ตามครูผู้สอน" else room_map
-        selected_val = st.selectbox("เลือกรายการ", options=list(map_ref.keys()), format_func=lambda x: map_ref.get(x, x))
         
-        if st.button("🚀 ประมวลผลใหม่", use_container_width=True):
+        selected_val = st.selectbox(
+            f"เลือกรายการ", 
+            options=list(map_ref.keys()), 
+            format_func=lambda x: map_ref.get(x, x)
+        )
+        
+        if st.button("🚀 ประมวลผลตารางใหม่", use_container_width=True):
             st.session_state.schedule_result = scheduler_engine(data_set, teacher_role_map)
 
     if 'schedule_result' in st.session_state and selected_val:
@@ -145,15 +149,17 @@ if data_set:
 
         st.markdown(f'<div class="schedule-title">ตารางสอน : {display_name}</div>', unsafe_allow_html=True)
         
-        # Grid สำหรับหน้าเว็บ
         grid = pd.DataFrame(index=DAYS_TH, columns=PERIODS).fillna("")
         for _, r in f_df.iterrows():
             t_name = teacher_map.get(str(r['teacher_id']), r['teacher_id'])
-            rm_name = room_map.get(str(r['room_id']), r['room_id'])
+            # ปรับปรุง: แสดงรหัสห้องเรียน [room_id] แทนชื่อห้อง
+            rid_display = f"[{r['room_id']}]"
             p_val = "พัก" if r['period'] == 5 else r['period']
-            grid.at[DAYS_MAP.get(r['day'], r['day']), p_val] = f"{r['subject_id']}\n{t_name}\n{rm_name}"
+            grid.at[DAYS_MAP.get(r['day'], r['day']), p_val] = f"{r['subject_id']}\n{t_name}\n{rid_display}"
         
         grid.loc[:, "พัก"] = "พัก"
+        grid.loc[:, ""] = ""
+        
         if view_mode == "ตามครูผู้สอน" and teacher_role_map.get(str(selected_val)) == "leader":
             grid.at["อังคาร", 8] = "ประชุม\nLeader"
 
@@ -161,29 +167,19 @@ if data_set:
         display_grid.columns = pd.MultiIndex.from_tuples(zip(TIMES, PERIODS))
         st.table(display_grid)
 
-        # --- 📥 ส่วนของปุ่ม Export ---
+        # --- Export Buttons ---
         st.divider()
         st.subheader("📥 ดาวน์โหลดข้อมูล")
         c1, c2, c3 = st.columns(3)
-        
         with c1:
-            # ปรับปรุง: Export CSV ในรูปแบบ Raw Data (บรรทัดต่อบรรทัด)
-            csv_cols = ['group_id', 'timeslot_id', 'day', 'period', 'subject_id', 'teacher_id', 'room_id']
-            # ตรวจเช็คว่า f_df มีคอลัมน์ครบไหมก่อน export
-            if all(col in f_df.columns for col in csv_cols):
-                csv_raw = f_df[csv_cols].to_csv(index=False).encode('utf-8-sig')
-                st.download_button("Export as CSV (Raw)", csv_raw, "output.csv", "text/csv", use_container_width=True)
-        
+            st.download_button("Export CSV (Raw)", f_df[['group_id', 'timeslot_id', 'day', 'period', 'subject_id', 'teacher_id', 'room_id']].to_csv(index=False).encode('utf-8-sig'), "output.csv", use_container_width=True)
         with c2:
             output = io.BytesIO()
             try:
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                     grid.to_excel(writer, sheet_name='Timetable')
-                st.download_button("Export as Excel (Grid)", output.getvalue(), "output.xlsx", use_container_width=True)
-            except:
-                st.warning("โปรดติดตั้ง xlsxwriter")
-            
+                st.download_button("Export Excel (Grid)", output.getvalue(), "output.xlsx", use_container_width=True)
+            except: st.warning("Install xlsxwriter")
         with c3:
             if HAS_FONT:
-                pdf_bytes = create_pdf(grid, display_name)
-                st.download_button("Export as PDF (Grid)", pdf_bytes, "output.pdf", "application/pdf", use_container_width=True)
+                st.download_button("Export PDF (Grid)", create_pdf(grid, display_name), "output.pdf", use_container_width=True)
